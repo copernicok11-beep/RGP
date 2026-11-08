@@ -1,0 +1,74 @@
+name: Construir APK del RPG
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Encontrar y descomprimir el proyecto (cualquier .zip en la raiz)
+        run: |
+          set -e
+          ls -la
+          ZIP=$(ls -t *.zip 2>/dev/null | head -n1 || true)
+          if [ -z "$ZIP" ]; then echo "No hay ningun .zip en la raiz del repositorio"; exit 1; fi
+          echo "Usando $ZIP"
+          mkdir -p src
+          unzip -q -o "$ZIP" -d src
+          PUB=$(find src -name pubspec.yaml -not -path '*/android/*' | head -n1)
+          if [ -z "$PUB" ]; then echo "El zip no contiene pubspec.yaml"; exit 1; fi
+          echo "APP=$(dirname "$PUB")" >> "$GITHUB_ENV"
+          echo "Proyecto en $(dirname "$PUB")"
+
+      - name: Instalar Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Instalar Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generar la carpeta android
+        run: |
+          set -e
+          flutter --version
+          flutter create --platforms=android --project-name puerto_alba_rpg --org com.puertoalba.rpg /tmp/shell
+          rm -rf "$APP/android"
+          cp -r /tmp/shell/android "$APP/android"
+
+      - name: Dependencias
+        working-directory: ${{ env.APP }}
+        run: flutter pub get
+
+      - name: Revisar el codigo (muestra los errores si los hay)
+        working-directory: ${{ env.APP }}
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings || true
+
+      - name: Construir APK
+        working-directory: ${{ env.APP }}
+        run: flutter build apk --release
+
+      - name: Guardar el APK como archivo de la ejecucion
+        uses: actions/upload-artifact@v4
+        with:
+          name: PuertoAlbaRPG-apk
+          path: ${{ env.APP }}/build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Publicar el APK en Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp "$APP/build/app/outputs/flutter-apk/app-release.apk" PuertoAlbaRPG.apk
+          gh release create "rpg-${{ github.run_number }}" PuertoAlbaRPG.apk --title "Puerto Alba RPG ${{ github.run_number }}" --notes "APK de prueba"
